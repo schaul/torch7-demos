@@ -15,3 +15,4 @@ datasets/
 # Ignore log folders
 log/
 
+/data

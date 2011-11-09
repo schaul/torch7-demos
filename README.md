@@ -1,4 +1,4 @@
-# Demos & Turorials for Torch7.
+# Demos & Tutorials for Torch7.
 
 All the demos/tutorials provided in this package
 require the following dependencies to be installed, in

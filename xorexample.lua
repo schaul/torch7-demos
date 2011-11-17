@@ -6,8 +6,10 @@
 ----------------------------------------------------------------------
 
 
-require 'nn'
 require 'torch'
+require 'nn'
+require 'nnx'
+
 
 
 -- (1) Build a multi-layer neural network
@@ -28,6 +30,7 @@ end
 -- the parameters are initialized randomly, e.g.
 ll2 = net.modules[3]
 print("weight2", ll2.weight)
+
 
 
 -- (2) Create a toy dataset (XOR)
@@ -101,6 +104,7 @@ for i=1,5 do
 end
 
 
+
 -- (5) Training the network
 print("init error", totalMSE(), "w", ll2.weight) 
 
@@ -130,3 +134,39 @@ end
 print("100th epoch", totalMSE(),"w", ll2.weight) 
 
 
+
+-- (6) Using a trainer and dataset to do the same
+netReset(net)
+print("new init", totalMSE(), "w",ll2.weight)
+
+-- for this we need to make a dataset object. Simple.
+dataset = nn.DataSet() 
+for i=1,4 do
+	dataset:add{input=inpt[i], output=targ[i]}
+end
+
+-- there are many optimizers available, but here is the simplest one
+-- (but even SGD has lots of additional parameters that could be set in realistic cases)
+optimizer = nn.SGDOptimization{module = net,
+                               criterion = criterion,
+                               learningRate = 0.2} 
+                               
+-- for some reason, we provide virtually the same information
+-- again to construct the trainer
+trainer = nn.OnlineTrainer{module = net,
+                           criterion = criterion,
+                           optimizer = optimizer,
+                           maxEpoch = 100,
+                           dispProgress=false,
+                           }
+
+-- a little hack to silence the trainer's outputs
+_print = print; print = function (...) end
+
+-- the actual training happens here.
+trainer:train(dataset)
+print = _print
+
+-- note that often the weights found in this second run are very different from the ones 
+-- in the first run, which is due to the random re-initialization.
+print("100th epoch", totalMSE(),"w", ll2.weight) 

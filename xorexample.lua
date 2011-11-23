@@ -214,9 +214,3 @@ lbfgs.init(parameters, gradParameters,
 output = lbfgs.run()
 
 print("100th epoch", totalMSE(),"w", ll2.weight) 
-
-
-
-
-
-

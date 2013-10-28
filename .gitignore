@@ -1,0 +1,26 @@
+# objects
+*.o
+*.so
+*.a
+
+# Ignore all scratch dir.
+scratch/
+
+# Videos dir
+videos/
+
+# Ignore datasets
+datasets/
+
+# Ignore log folders
+log/
+
+# Ignore emacs saved files
+*.*~
+
+# ignore datasets
+*.mat
+*.t7
+
+# ignore Mac OS dir files
+.DS_Store

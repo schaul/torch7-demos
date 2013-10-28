@@ -46,6 +46,8 @@ cmd:option('-momentum', 0, 'momentum (SGD only)')
 cmd:option('-t0', 3, 'start averaging (ASGD) or switch methods (SGD+LFBGS) at the t0-th epoch')
 cmd:option('-maxIter', 3, 'maximum nb of iterations for CG and LBFGS')
 cmd:option('-threads', 1, 'nb of threads')
+cmd:option('-unnormalized', false, 'use raw input values, instead of normalized ones')
+cmd:option('-antinormalized', false, 'artificially messed-up input normalization')
 cmd:text()
 opt = cmd:parse(arg)
 
@@ -144,13 +146,23 @@ else
    print('<warning> only using 2000 samples to train quickly (use flag -full to use 60000 samples)')
 end
 
--- create training set and normalize
+-- create training set
 trainData = mnist.loadTrainSet(nbTrainingPatches, geometry)
-mean, std = trainData:normalizeGlobal()
-
--- create test set and normalize
+-- create test set
 testData = mnist.loadTestSet(nbTestingPatches, geometry)
-testData:normalizeGlobal(mean, std)
+
+if opt.antinormalized then
+	local size = 784
+	local mean = torch.randn(1,size)
+	local std = torch.randn(1,size):pow(2)
+	trainData:normalize(mean, std)
+	testData:normalize(mean, std)
+elseif not opt.unnormalized then
+	-- normalize inputs
+	local mean, std
+	mean, std = trainData:normalizeGlobal()
+	testData:normalizeGlobal(mean, std)
+end
 
 ----------------------------------------------------------------------
 -- define training and testing functions
@@ -305,6 +317,48 @@ function train(dataset)
                              t0 = nbTrainingPatches * (opt.t0-1)}
          _,_,average = optim.asgd(feval, parameters, config)
 
+
+	  elseif opt.optimization == 'RASGD' then
+		 require 'optimx'
+		 --- compute the median of a 1D tensor
+		 local function median(t)
+			local dim = t:nElement()
+			local st = torch.sort(t)
+			if dim % 2 == 0 then
+				return (st[dim/2]+st[dim/2+1])/2.0
+			else
+				return st[(dim+1)/2]
+			end
+		 end
+		 local function feval2(x, deltax)
+		 	local a = config._algo
+		 	if a.nevals % 10 == 0 and a.nevals > 1 then
+			 	print()
+		        print(a.nevals, a._dim, a:globalVsgdRate(), median(a._last_rates), a._last_rates:max(), median(a._taus), a._rampup, a._gmask:sum())
+			end
+        	if deltax then
+        		local is = {110, 5090, 20400} 
+        		parameters:add(deltax)
+	        	local em2 = feval(parameters)
+				local dw2 = gradParameters:clone()
+				parameters:add(-1, deltax)
+				local em = feval(parameters)
+	        	if a.nevals % 10 == 0 and a.nevals > 1 and a._hestim then
+		        	print('', a.nevals, median(a._hestim), a._hestim:max(), a._hestim:min(), a._hmask:sum())
+				end
+				--[[
+				for _, i in ipairs(is) do
+					print('', i, parameters[i], deltax[i], gradParameters[i], dw2[i], a._hestim[i], a._last_rates[i], a._vpart[i])
+				end
+				--]]
+				return em, em2, gradParameters, dw2
+			else
+				return feval(parameters)
+			end
+		 end
+         config = config or {fd_gaps=10}
+         optimx.rasgd(feval2, parameters, config)
+
       else
          error('unknown optimization method')
       end
@@ -323,7 +377,7 @@ function train(dataset)
    -- save/log current net
    local filename = paths.concat(opt.save, 'mnist.net')
    os.execute('mkdir -p ' .. sys.dirname(filename))
-   if sys.filep(filename) then
+   if paths.filep(filename) then
       os.execute('mv ' .. filename .. ' ' .. filename .. '.old')
    end
    print('<trainer> saving network to '..filename)

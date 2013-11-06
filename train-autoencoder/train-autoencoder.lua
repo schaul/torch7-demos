@@ -56,7 +56,7 @@ cmd:option('-momentum', 0, 'gradient momentum')
 cmd:option('-maxiter', 1000000, 'max number of updates')
 
 -- use hessian information for training:
-cmd:option('-hessian', true, 'compute diagonal hessian coefficients to condition learning rates')
+cmd:option('-hessian', false, 'compute diagonal hessian coefficients to condition learning rates')
 cmd:option('-hessiansamples', 500, 'number of samples to use to estimate hessian')
 cmd:option('-hessianinterval', 10000, 'compute diagonal hessian coefs at every this many samples')
 cmd:option('-minhessian', 0.02, 'min hessian to avoid extreme speed up')
@@ -71,6 +71,7 @@ cmd:option('-statinterval', 5000, 'interval for saving stats and models')
 cmd:option('-v', false, 'be verbose')
 cmd:option('-display', false, 'display stuff')
 cmd:option('-wcar', '', 'additional flag to differentiate this run')
+cmd:option('-rasgd', false, 'use RASGD algorithm')
 cmd:text()
 
 params = cmd:parse(arg)
@@ -238,8 +239,13 @@ local avTrainingError = torch.FloatTensor(math.ceil(params.maxiter/params.statin
 local err = 0
 local iter = 0
 
-for t = 1,params.maxiter,params.batchsize do
+local _, shuffled = torch.rand(dataset:size()):sort()
 
+for t = 1,params.maxiter,params.batchsize do
+   if t%dataset:size() == 1 then
+   	   print("Reshuffle")
+   	   _, shuffled = torch.rand(dataset:size()):sort()
+   end
    --------------------------------------------------------------------
    -- update diagonal hessian parameters
    --
@@ -292,12 +298,11 @@ for t = 1,params.maxiter,params.batchsize do
    --------------------------------------------------------------------
    -- create mini-batch
    --
-   local example = dataset[t]
    local inputs = {}
    local targets = {}
    for i = t,t+params.batchsize-1 do
       -- load new sample
-      local sample = dataset[i]
+      local sample = dataset[shuffled[(i-1)%dataset:size()+1]]
       local input = sample[1]:clone()
       local target = sample[2]:clone()
       table.insert(inputs, input)
@@ -330,14 +335,36 @@ for t = 1,params.maxiter,params.batchsize do
       return f,dl_dx
    end
 
+   local feval2 = function(_, deltax)
+        	if deltax then
+        		x:add(deltax)
+	        	local em2 = feval()
+				local dw2 = dl_dx:clone()
+				x:add(-1, deltax)
+				local em = feval()
+				return em, em2, dl_dx, dw2
+			else
+				return feval(_)
+			end
+	end
+
    --------------------------------------------------------------------
    -- one SGD step
    --
-   sgdconf = sgdconf or {learningRate = params.eta,
-                         learningRateDecay = params.etadecay,
-                         learningRates = etas,
-                         momentum = params.momentum}
-   _,fs = optim.sgd(feval, x, sgdconf)
+   if params.rasgd then
+   		require 'optimx'
+		rasgdconf = rasgdconf or {}
+		_,fs = optimx.rasgd(feval2, x, rasgdconf)
+		if iter % 100 == 0 then
+			print(iter, fs[1], rasgdconf._algo._rampup, rasgdconf._algo:globalVsgdRate())
+		end
+   else
+	   sgdconf = sgdconf or {learningRate = params.eta,
+	                         learningRateDecay = params.etadecay,
+	                         learningRates = etas,
+	                         momentum = params.momentum}
+	   _,fs = optim.sgd(feval, x, sgdconf)
+   end
    err = err + fs[1]
 
    -- normalize

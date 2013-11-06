@@ -1,10 +1,10 @@
 ----------------------------------------------------------------------
--- This script shows how to train different models on the MNIST 
+-- This script shows how to train different models on the MNIST
 -- dataset, using multiple optimization techniques (SGD, LBFGS)
 --
--- This script demonstrates a classical example of training 
+-- This script demonstrates a classical example of training
 -- well-known models (convnet, MLP, logistic regression)
--- on a 10-class classification problem. 
+-- on a 10-class classification problem.
 --
 -- It illustrates several points:
 -- 1/ description of the model
@@ -33,7 +33,7 @@ local opt = lapp[[
    -m,--model         (default "convnet")   type of model tor train: convnet | mlp | linear
    -f,--full                                use the full dataset
    -p,--plot                                plot while training
-   -o,--optimization  (default "SGD")       optimization: SGD | LBFGS 
+   -o,--optimization  (default "SGD")       optimization: SGD | LBFGS
    -r,--learningRate  (default 0.05)        learning rate, for SGD only
    -b,--batchSize     (default 10)          batch size
    -m,--momentum      (default 0)           momentum, for SGD only
@@ -77,7 +77,7 @@ if opt.network == '' then
 
    if opt.model == 'convnet' then
       ------------------------------------------------------------
-      -- convolutional network 
+      -- convolutional network
       ------------------------------------------------------------
       -- stage 1 : mean suppresion -> filter bank -> squashing -> max pooling
       model:add(nn.SpatialConvolutionMM(1, 32, 5, 5))
@@ -255,7 +255,7 @@ function train(dataset)
             lineSearch = optim.lswolfe
          }
          optim.lbfgs(feval, parameters, lbfgsState)
-       
+
          -- disp report:
          print('LBFGS step')
          print(' - progress in batch: ' .. t .. '/' .. dataset:size())
@@ -271,14 +271,14 @@ function train(dataset)
             learningRateDecay = 5e-7
          }
          optim.sgd(feval, parameters, sgdState)
-      
+
          -- disp progress
          xlua.progress(t, dataset:size())
 
 
 	  elseif opt.optimization == 'RASGD' then
 		 require 'optimx'
-         rasgdState = rasgdState or {fd_gaps=10}
+         rasgdState = rasgdState or {outlier_scale=0}
 
 		 --- compute the median of a 1D tensor
 		 local function median(t)
@@ -293,36 +293,30 @@ function train(dataset)
 
 		 local function feval2(x, deltax)
 		 	local a = rasgdState._algo
-		 	if a.nevals % 10 == 0 and a.nevals > 1 then
-		        print(a.nevals, a._dim, a:globalVsgdRate(), median(a._last_rates), a._last_rates:max(), median(a._taus), a._rampup, a._gmask:sum())
+		 	if a.nevals % 100 == 0 and a.nevals > 1 then
+		        print(a.nevals, a._dim, a:globalVsgdRate(), median(a._last_rates), a._last_rates:max(), median(a._taus), a._rampup)
 			end
         	if deltax then
-        		local is = {110, 5090, 20400} 
         		parameters:add(deltax)
 	        	local em2 = feval(parameters)
 				local dw2 = gradParameters:clone()
 				parameters:add(-1, deltax)
 				local em = feval(parameters)
-	        	if a.nevals % 10 == 0 and a.nevals > 1 and a._hestim then
-		        	print('', median(a._hestim), a._hestim:max(), a._hestim:min(), a._hmask:sum())
+	        	if a.nevals % 100 == 0 and a.nevals > 1 and a._hestim then
+		        	print('', median(a._hestim), a._hestim:max(), a._hestim:min())
 				end
-				--[[
-				for _, i in ipairs(is) do
-					print('', i, parameters[i], deltax[i], gradParameters[i], dw2[i], a._hestim[i], a._last_rates[i], a._vpart[i])
-				end
-				--]]
 				return em, em2, gradParameters, dw2
 			else
 				return feval(parameters)
 			end
 		 end
-		 
+
          optimx.rasgd(feval2, parameters, rasgdState)
       else
          error('unknown optimization method')
       end
    end
-   
+
    -- time taken
    time = sys.clock() - time
    time = time / dataset:size()

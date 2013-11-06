@@ -5,8 +5,17 @@
 --
 
 require 'nn'
+require 'pl'
 require 'optim'
 
+local opt = lapp[[
+	--rasgd				      Use adaptive learning rates
+	--seed    (default 1)     Random seed
+	--epochs  (default 200)   Number of epochs to run
+]]
+
+torch.manualSeed(opt.seed)
+math.randomseed(opt.seed)
 
 ----------------------------------------------------------------------
 -- 1. Create the training data
@@ -64,16 +73,16 @@ numberOfBrands = torch.max(dataset_outputs) - torch.min(dataset_outputs) + 1
 
 -- summarize the data
 function summarizeData()
-   function p(name,value) 
+   function p(name,value)
       print(string.format('%20s %f', name, value) )
    end
    p('number of brands', numberOfBrands)
    p('min brand', torch.min(brands))
    p('max brand', torch.max(brands))
-   
+
    p('min female', torch.min(females))
    p('max female', torch.max(females))
-   
+
    p('min age', torch.min(ages))
    p('max age', torch.max(ages))
 end
@@ -83,14 +92,14 @@ summarizeData()
 ----------------------------------------------------------------------
 -- 2. Define the model (predictor)
 
--- The model is a multinomial logistic regression. 
+-- The model is a multinomial logistic regression.
 
 -- It will consist of two layers that operate sequentially:
 --  - 1: a linear model
 --  - 2: a soft max layer
 
 -- The linear model supposes that the un-normalized probability of choosing
--- a specific brand is proportional to the product of unknown weights and 
+-- a specific brand is proportional to the product of unknown weights and
 -- the observed variables plus a bias:
 --   Prob(brand = b) = bias + weight1 * female * weight2 * age
 -- There are two inputs (female and age) and three outputs (one for each
@@ -101,7 +110,7 @@ linLayer = nn.Linear(2,3)
 -- The soft max layer takes the 3 outputs from the linear layer and
 -- transforms them to lie in the range (0,1) and to sum to 1. Thus, unlike
 -- some text books in which the probabilities are un-normalized, the output
--- of the soft max layer will be normalized probabilities. 
+-- of the soft max layer will be normalized probabilities.
 
 -- The log soft max layer takes the log of these 3 outputs. This is done
 -- because we want to feed the log values into the ClassNLLCriterion
@@ -129,8 +138,8 @@ model:add(softMaxLayer)
 -- tensor. Hence, the use of the LogSoftMax layer in the model instead
 -- of SoftMax.
 
--- Minimizing the cross-entropy is equivalent to maximizing the 
--- maximum a-posteriori (MAP) prediction, which is equivalent to 
+-- Minimizing the cross-entropy is equivalent to maximizing the
+-- maximum a-posteriori (MAP) prediction, which is equivalent to
 -- minimizing the negative log-likelihoood (NLL), hence the use of
 -- the NLL loss.
 
@@ -144,16 +153,16 @@ criterion = nn.ClassNLLCriterion()
 -- in 'model', we follow a stochastic gradient descent procedure (SGD).
 
 -- SGD is a good optimization algorithm when the amount of training data
--- is large, and estimating the gradient of the loss function over the 
+-- is large, and estimating the gradient of the loss function over the
 -- entire training set is too costly.
 
 -- Given an arbitrarily complex model, we can retrieve its trainable
--- parameters, and the gradients of our loss function wrt these 
+-- parameters, and the gradients of our loss function wrt these
 -- parameters by doing so:
 
 x, dl_dx = model:getParameters()
 
--- The above statement does not create a copy of the parameters in the 
+-- The above statement does not create a copy of the parameters in the
 -- model! Instead it create in x and dl_dx a view of the model's weights
 -- and derivative wrt the weights. The view is implemented so that when
 -- the weights and their derivatives changes, so do the x and dl_dx. The
@@ -161,7 +170,7 @@ x, dl_dx = model:getParameters()
 
 -- A note on terminology: In the machine learning literature, the parameters
 -- that one seeks to learn are often called weights and denoted with a W.
--- However, in the optimization literature, the parameter one seeks to 
+-- However, in the optimization literature, the parameter one seeks to
 -- optimize is often called x. Hence the use of x and dl_dx above.
 
 -- In the following code, we define a closure, feval, which computes
@@ -170,22 +179,31 @@ x, dl_dx = model:getParameters()
 -- which, in this example, are all the weights of the linear matrix of
 -- our mode, plus one bias.
 
-feval = function(x_new)
-   -- set x to x_new, if differnt
+
+local _, shuffled = torch.rand((#dataset_inputs)[1]):sort()
+
+feval = function(x_new, no_new)
+   -- set x to x_new, if different
    -- (in this simple example, x_new will typically always point to x,
    -- so the copy is really useless)
    if x ~= x_new then
       x:copy(x_new)
    end
 
-   -- select a new training sample
-   _nidx_ = (_nidx_ or 0) + 1
-   if _nidx_ > (#dataset_inputs)[1] then _nidx_ = 1 end
+	if not no_new then
+   		-- select a new training sample
+   		_nidx_ = (_nidx_ or 0) + 1
+   		if _nidx_ > (#dataset_inputs)[1] then
+   			_nidx_ = 1
+   			_, shuffled = torch.rand((#dataset_inputs)[1]):sort()
 
-   local inputs = dataset_inputs[_nidx_]
-   local target = dataset_outputs[_nidx_]
+   		end
+	end
 
-   -- reset gradients (gradients are always accumulated, to accomodate 
+   local inputs = dataset_inputs[shuffled[_nidx_]]
+   local target = dataset_outputs[shuffled[_nidx_]]
+
+   -- reset gradients (gradients are always accumulated, to accommodate
    -- batch methods)
    dl_dx:zero()
 
@@ -193,13 +211,31 @@ feval = function(x_new)
    local loss_x = criterion:forward(model:forward(inputs), target)
    model:backward(inputs, criterion:backward(model.output, target))
 
+
+
    -- return loss(x) and dloss/dx
    return loss_x, dl_dx
 end
 
+feval2 = function(_, deltax)
+
+        	if deltax then
+        		x:add(deltax)
+	        	local em2 = feval(x)
+				local dw2 = dl_dx:clone()
+				x:add(-1, deltax)
+				local em = feval(x, true)
+				--print(x:reshape(1,9))
+				return em, em2, dl_dx, dw2
+			else
+				return feval(x)
+			end
+
+end
+
 -- Given the function above, we can now easily train the model using SGD.
 -- For that, we need to define four key parameters:
---   + a learning rate: the size of the step taken at each stochastic 
+--   + a learning rate: the size of the step taken at each stochastic
 --     estimate of the gradient
 --   + a weight decay, to regularize the solution (L2 regularization)
 --   + a momentum term, to average steps over time
@@ -212,13 +248,16 @@ sgd_params = {
    momentum = 0
 }
 
+require 'optimx'
+rasgd_params = {}
+
 -- We're now good to go... all we have left to do is run over the dataset
--- for a certain number of iterations, and perform a stochastic update 
+-- for a certain number of iterations, and perform a stochastic update
 -- at each iteration. The number of iterations is found empirically here,
--- but should typically be determinined using cross-validation (i.e.
+-- but should typically be determined using cross-validation (i.e.
 -- using multiple folds of training/test subsets).
 
-epochs = 1e2  -- number of times to cycle over our training data
+epochs = opt.epochs  -- number of times to cycle over our training data
 
 print('')
 print('============================================================')
@@ -233,15 +272,18 @@ for i = 1,epochs do
    -- an epoch is a full loop over our training data
    for i = 1,(#dataset_inputs)[1] do
 
-      -- optim contains several optimization algorithms. 
+      -- optim contains several optimization algorithms.
       -- All of these algorithms assume the same parameters:
-      --   + a closure that computes the loss, and its gradient wrt to x, 
+      --   + a closure that computes the loss, and its gradient wrt to x,
       --     given a point x
       --   + a point x
       --   + some parameters, which are algorithm-specific
 
-      _,fs = optim.sgd(feval,x,sgd_params)
-
+	  if opt.rasgd then
+      	_,fs = optimx.rasgd(feval2,x,rasgd_params)
+      else
+      	_,fs = optim.sgd(feval,x,sgd_params)
+      end
       -- Functions in optim all return two things:
       --   + the new x, found by the optimization method (here SGD)
       --   + the value of the loss functions at all points that were used by
@@ -253,8 +295,8 @@ for i = 1,epochs do
 
    -- report average error on epoch
    current_loss = current_loss / (#dataset_inputs)[1]
-   print('epoch = ' .. i .. 
-	 ' of ' .. epochs .. 
+   print('epoch = ' .. i ..
+	 ' of ' .. epochs ..
 	 ' current loss = ' .. current_loss)
 
 end
@@ -286,7 +328,7 @@ feval = function(x_new)
       x:copy(x_new)
    end
 
-   -- reset gradients (gradients are always accumulated, to accomodate 
+   -- reset gradients (gradients are always accumulated, to accomodate
    -- batch methods)
    dl_dx:zero()
 
@@ -361,12 +403,12 @@ print('')
 -- The input variables have narrow ranges, so we just compare all possible
 -- input variables in the training data.
 
--- Determine actual frequency of the each female-age pair in the 
+-- Determine actual frequency of the each female-age pair in the
 -- training data
 
 -- return index of largest value
 function maxIndex(a,b,c)
-   if a >=b and a >= c then return 1 
+   if a >=b and a >= c then return 1
    elseif b >= a and b >= c then return 2
    else return 3 end
 end
@@ -407,7 +449,7 @@ function predictOur(age, female)
    local input = torch.Tensor(2)
    input[1] = female  -- must be in same order as when the model was trained!
    input[2] = age
-   local logProbs = model:forward(input)  
+   local logProbs = model:forward(input)
    --print('predictOur', age, female, input)
    local probs = torch.exp(logProbs)
    --print('logProbs', logProbs)
@@ -415,7 +457,7 @@ function predictOur(age, female)
    local prob1, prob2, prob3 = probs[1], probs[2], probs[3]
    return maxIndex(prob1, prob2, prob3), prob1, prob2, prob3
 end
-      
+
 counts = {}
 
 function makeKey(age, brand, female)
@@ -468,18 +510,18 @@ print(string.format('%20s %f', 'epochs', epochs))
 print(' ')
 print('current loss', current_loss)
 
--- print the headers 
+-- print the headers
 print(' ')
 lineFormat = '%-6s %-3s| %-17s | %-17s | %-17s | %-1s %-1s %-1s'
 print(
    string.format(lineFormat,
-		 '', '', 
-		 'actual probs', 'text probs', 'our probs', 
+		 '', '',
+		 'actual probs', 'text probs', 'our probs',
 		 'best', '', ''))
 choices = 'brnd1 brnd2 brnd3'
 print(string.format(lineFormat,
-		    'female', 'age', 
-		    choices, choices, choices, 
+		    'female', 'age',
+		    choices, choices, choices,
 		    'a', 't', 'o'))
 
 -- print each row in the table
@@ -500,7 +542,7 @@ function indexString(p1, p2, p3)
    -- return index of highest probability or '-' if nearly all zeroes
    if p1 < 0.001 and p2 < 0.001 and p3 < 0.001 then
       return '-'
-   else 
+   else
       return string.format('%1d', maxIndex(p1, p2, p3))
    end
 end
@@ -511,15 +553,15 @@ for female = 0,1 do
       -- calculate the actual probabilities in the training data
       local actual1, actual2, actual3 = actualProbabilities(age, female)
       -- calculate the prediction and probabilities using the model in the text
-      local textBrand, textProb1, textProb2, textProb3 = 
+      local textBrand, textProb1, textProb2, textProb3 =
 	 predictText(age, female)
       -- calculate the probabilities using the model we just trained
       --print("main", age, female)
-      local ourBrand, ourProb1, ourProb2, ourProb3 = 
+      local ourBrand, ourProb1, ourProb2, ourProb3 =
 	 predictOur(age, female)
       print(
 	 string.format(lineFormat,
-		       formatFemale(female), 
+		       formatFemale(female),
 		       formatAge(age),
 		       formatProbs(actual1, actual2, actual3),
 		       formatProbs(textProb1, textProb2, textProb3),
